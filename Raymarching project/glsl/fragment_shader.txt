@@ -1,0 +1,156 @@
+#version 330 core
+
+uniform sampler2D tex;
+uniform float time;
+uniform vec2 resolution;
+
+uniform vec3 CameraRotation; // the angles of camera rotation
+uniform vec3 ro;             // position of the camera
+
+in vec2 uvs;
+
+// raymarching constants
+#define MAX_STEPS 200
+#define MAX_DIST 200.
+#define SURF_DIST .001
+
+#define time time*0.01
+#define PI 3.141592
+#define degree 2*PI/360
+
+vec3 col = vec3(0);
+
+mat3 Pitch(float a){
+    float Sin = sin(a);
+    float Cos = cos(a);
+
+    return mat3(1, 0, 0,
+                0, Cos, -Sin,
+                0, Sin, Cos);
+}
+mat3 Yaw(float a){
+    float Sin = sin(a);
+    float Cos = cos(a);
+
+    return mat3(Cos, 0, Sin,
+                0, 1, 0,
+                -Sin, 0, Cos);
+}
+mat3 Roll(float a){
+    float Sin = sin(a);
+    float Cos = cos(a);
+
+    return mat3(Cos, -Sin, 0,
+                Sin, Cos, 0,
+                0, 0, 1);
+}
+
+mat2 Rot(float a) {
+    float s = sin(a);
+    float c = cos(a);
+    return mat2(c, -s, s, c);
+}
+
+float smin( float a, float b, float k ) {
+    float h = clamp( 0.5+0.5*(b-a)/k, 0., 1. );
+    return mix( b, a, h ) - k*h*(1.0-h);
+}
+
+float sdBox(vec3 p, vec3 s) {
+    p = abs(p)-s;
+	return length(max(p, 0.))+min(max(p.x, max(p.y, p.z)), 0.);
+}
+
+float sdSphere(vec3 p, float r) {
+    return length(p)-r;
+}
+
+vec2 GetDist(vec3 p) {
+    float id = 0.;
+
+    // objects
+    float d = p.y;
+    float box = sdBox(p-vec3(0, 1, 0), vec3(1));
+    // objects
+
+    // min distance
+    d = min(d, box);
+    // min distance
+
+    // id system
+    if (d == box) id = 1.;
+    // id system
+    
+    return vec2(d, id);
+}
+
+vec2 RayMarch(vec3 ro, vec3 rd) {
+	float dO=0.;
+    vec2 distance;
+    
+    for(int i=0; i<MAX_STEPS; i++) {
+    	vec3 p = ro + rd*dO;
+        distance = GetDist(p);
+        float dS = abs(distance.x);
+        dO += dS;
+        if(dO>MAX_DIST || dS<SURF_DIST) break;
+    }
+    
+    return vec2(dO, distance.y);
+}
+
+vec3 GetNormal(vec3 p) {
+	float d = GetDist(p).x;
+    vec2 e = vec2(.001, 0);
+    
+    vec3 n = d - vec3(
+        GetDist(p-e.xyy).x,
+        GetDist(p-e.yxy).x,
+        GetDist(p-e.yyx).x);
+    
+    return normalize(n);
+}
+
+float GetLight(vec3 p) {
+    vec3 lightPos = vec3(-4 + sin(time/50.), 5, 4 - sin(time/50.));
+    vec3 l = normalize(lightPos-p);
+    vec3 n = GetNormal(p);
+    
+    float dif = clamp(dot(n, l)*.5+.5, 0., 1.);
+    float d = RayMarch(p+n*SURF_DIST*2., l).x;
+    if(p.y<.01 && d<length(lightPos-p)) dif *= .5;
+    
+    return dif;
+}
+
+vec3 GetMaterial(float id, vec3 p){
+    if (id == 1) return vec3(0.1, 0.4, 0.8); // cube
+    return vec3(0.2 + 0.4 * mod(floor(p.x) + floor(p.z), 2.)); // plane
+}
+
+void main()
+{
+    vec2 uv = (gl_FragCoord.xy-.5*resolution)/resolution.y;
+    // ray direction
+    vec3 rd = normalize(vec3(uv.x, uv.y, 1));
+    // camera rotation
+    rd *= Pitch(CameraRotation.y * degree);    
+    rd *= Yaw  (CameraRotation.x * degree);
+    rd *= Roll (CameraRotation.z * degree);
+    
+
+    vec2 d = RayMarch(ro, rd); // distance to the closest field
+    vec3 p = ro + d.x * rd;    // the point in the closest field
+    col += GetMaterial(d.y, p);// coloring
+    vec3 background_col = vec3(.811, 1, 1);
+    
+    if (d.x < MAX_DIST){ // if the ray hits an object
+        col += (vec3(GetLight(p))-.1)*.7;
+        col = mix(col, background_col, 1 - exp(-0.0008 * d.x * d.x));
+    } else{              // if it doesn't
+        col = background_col - max(0.45 * rd.y, 0.); // background color
+    }
+
+    col += texture(tex, uvs).rgb;
+    gl_FragColor = vec4(col, 1.0);
+}
